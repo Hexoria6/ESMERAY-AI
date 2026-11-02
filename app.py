@@ -1,0 +1,623 @@
+
+import streamlit as st
+import requests
+import io
+import time
+import random
+
+from pypdf import PdfReader
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+
+# ==========================================
+# PAGE CONFIGURATION
+# ==========================================
+
+st.set_page_config(
+    page_title="ESMERAY AI",
+    page_icon="✦",
+    layout="wide"
+)
+
+PRIMARY_MODEL = "gemini-3.8-flash"
+FALLBACK_MODEL = "gemini-3.6-flash"
+
+API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
+
+
+# ==========================================
+# DESIGN - EMERALD, TEAL AND MINT
+# ==========================================
+
+st.markdown("""
+<style>
+
+.stApp {
+    background: linear-gradient(
+        135deg, #071b19, #103b35, #081f20
+    );
+    color: white;
+}
+
+header[data-testid="stHeader"] {
+    background: transparent;
+}
+
+.block-container {
+    max-width: 1050px;
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+}
+
+h1, h2, h3, p, label {
+    color: white;
+}
+
+.nova-title {
+    text-align: center;
+    font-size: 48px;
+    font-weight: 800;
+    color: #eafff5;
+    margin-bottom: 5px;
+    letter-spacing: 2px;
+}
+
+.nova-subtitle {
+    text-align: center;
+    color: #a9d8c9;
+    font-size: 16px;
+    margin-bottom: 30px;
+}
+
+.welcome {
+    text-align: center;
+    padding: 32px 15px;
+    border: 1px solid #398a72;
+    border-radius: 22px;
+    background: linear-gradient(
+        135deg, #12483c, #1d6653
+    );
+    margin-bottom: 25px;
+}
+
+.welcome h2 {
+    font-size: 30px;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+.welcome p {
+    color: #d0f5e6;
+}
+
+div[data-testid="stChatMessage"] {
+    border: 1px solid #397a68;
+    border-radius: 16px;
+    padding: 14px;
+    margin-bottom: 14px;
+    background: #123a34;
+}
+
+div[data-testid="stChatMessage"]:has(
+    div[data-testid="chatAvatarIcon-user"]
+) {
+    background: #ffffff;
+    color: #153b32;
+    border: 1px solid #d9eee5;
+}
+
+div[data-testid="stChatMessage"]:has(
+    div[data-testid="chatAvatarIcon-user"]
+) p {
+    color: #153b32 !important;
+}
+
+div[data-testid="stChatMessage"] p {
+    color: white;
+}
+
+.stButton > button {
+    width: 100%;
+    min-height: 48px;
+    border-radius: 12px;
+    border: 1px solid #68b99b;
+    background: #174d40;
+    color: white;
+    transition: 0.2s;
+}
+
+.stButton > button:hover {
+    background: #26745d;
+    border-color: #a8f0d1;
+    color: white;
+}
+
+.stChatInput textarea {
+    color: white !important;
+}
+
+section[data-testid="stSidebar"] {
+    background: #092723;
+}
+
+div[data-testid="stFileUploader"] {
+    border: 1px dashed #70c6a5;
+    border-radius: 12px;
+    padding: 10px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# ==========================================
+# SESSION STATE
+# ==========================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "documents" not in st.session_state:
+    st.session_state.documents = []
+
+if "pending_prompt" not in st.session_state:
+    st.session_state.pending_prompt = None
+
+
+# ==========================================
+# DOCUMENT PROCESSING
+# ==========================================
+
+def extract_text(uploaded_file):
+    try:
+        name = uploaded_file.name.lower()
+
+        if name.endswith(".pdf"):
+            reader = PdfReader(
+                io.BytesIO(uploaded_file.getvalue())
+            )
+
+            return "\n".join(
+                page.extract_text() or ""
+                for page in reader.pages
+            )
+
+        if name.endswith(".txt"):
+            return uploaded_file.getvalue().decode(
+                "utf-8",
+                errors="replace"
+            )
+
+    except Exception as error:
+        st.warning(
+            f"Could not read {uploaded_file.name}: {error}"
+        )
+
+    return ""
+
+
+def split_into_chunks(
+    text,
+    chunk_size=900,
+    overlap=150
+):
+    text = " ".join(text.split())
+
+    if not text:
+        return []
+
+    chunks = []
+    start = 0
+
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+
+        if end >= len(text):
+            break
+
+        start = end - overlap
+
+    return chunks
+
+
+def retrieve_context(question):
+    chunks = st.session_state.documents
+
+    if not chunks:
+        return ""
+
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            max_features=5000
+        )
+
+        matrix = vectorizer.fit_transform(
+            chunks + [question]
+        )
+
+        scores = cosine_similarity(
+            matrix[-1],
+            matrix[:-1]
+        ).flatten()
+
+        best_indices = scores.argsort()[-4:][::-1]
+
+        selected = [
+            chunks[i]
+            for i in best_indices
+            if scores[i] > 0
+        ]
+
+        return "\n\n".join(selected)
+
+    except Exception:
+        return ""
+
+
+# ==========================================
+# GEMINI API REQUEST WITH RETRIES
+# ==========================================
+
+def call_model(model, payload, api_key):
+
+    url = f"{API_BASE}{model}:generateContent"
+
+    for attempt in range(3):
+
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
+                },
+                json=payload,
+                timeout=60
+            )
+
+        except requests.exceptions.Timeout:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+
+            return None, "The request timed out."
+
+        except requests.exceptions.RequestException:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+
+            return None, "Could not connect to the AI service."
+
+        if response.status_code == 200:
+
+            try:
+                data = response.json()
+                candidates = data.get("candidates", [])
+
+                if not candidates:
+                    return None, "The model returned no answer."
+
+                parts = candidates[0].get(
+                    "content", {}
+                ).get("parts", [])
+
+                answer = "\n".join(
+                    part.get("text", "")
+                    for part in parts
+                    if part.get("text")
+                ).strip()
+
+                return (
+                    answer or None,
+                    None if answer else "The model returned an empty answer."
+                )
+
+            except (ValueError, KeyError, TypeError):
+                return None, "Unexpected AI response."
+
+        if response.status_code in (
+            408, 429, 500, 502, 503, 504
+        ):
+            if attempt < 2:
+                delay = (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(delay)
+                continue
+
+            return None, f"Temporary API error {response.status_code}"
+
+        try:
+            detail = response.json().get(
+                "error", {}
+            ).get("message", "Unknown API error")
+        except Exception:
+            detail = "Unexpected API response."
+
+        return None, f"API error {response.status_code}: {detail}"
+
+    return None, "Please try again later."
+
+
+# ==========================================
+# ESMERAY AI ASSISTANT
+# ==========================================
+
+def ask_esmeray(question):
+
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+
+        context = retrieve_context(question)
+
+        if context:
+            prompt = f"""
+Use these document excerpts when relevant.
+If the answer is not present in the documents,
+clearly say so.
+
+DOCUMENT EXCERPTS:
+
+{context}
+
+USER QUESTION:
+
+{question}
+"""
+        else:
+            prompt = question
+
+        system_instruction = """
+You are ESMERAY, a helpful, friendly and intelligent AI assistant.
+
+Your responsibilities:
+
+1. Give clear and accurate answers.
+2. Explain difficult topics in simple language.
+3. Help with learning, writing and brainstorming.
+4. Be friendly and respectful.
+5. When documents are supplied, prioritize their contents.
+6. Never pretend to know information that was not provided.
+"""
+
+        contents = []
+
+        # Do not add the current question twice.
+        previous_messages = st.session_state.messages[:-1]
+
+        for message in previous_messages[-10:]:
+
+            contents.append({
+                "role": (
+                    "user"
+                    if message["role"] == "user"
+                    else "model"
+                ),
+                "parts": [
+                    {"text": message["content"]}
+                ]
+            })
+
+        contents.append({
+            "role": "user",
+            "parts": [{"text": prompt}]
+        })
+
+        payload = {
+            "system_instruction": {
+                "parts": [
+                    {"text": system_instruction}
+                ]
+            },
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": 1500
+            }
+        }
+
+        answer, error = call_model(
+            PRIMARY_MODEL,
+            payload,
+            api_key
+        )
+
+        if answer:
+            return answer
+
+        # Fallback only for temporary service errors.
+        if error and error.startswith("Temporary API error"):
+
+            answer, fallback_error = call_model(
+                FALLBACK_MODEL,
+                payload,
+                api_key
+            )
+
+            if answer:
+                return answer
+
+            return (
+                "ESMERAY is temporarily busy. "
+                "Please wait a little and try again."
+            )
+
+        return error or "ESMERAY could not generate an answer."
+
+    except KeyError:
+        return (
+            "GEMINI_API_KEY is missing. "
+            "Please check Streamlit Secrets."
+        )
+
+    except Exception:
+        return (
+            "Something went wrong. "
+            "Please try asking again."
+        )
+
+
+# ==========================================
+# SIDEBAR
+# ==========================================
+
+with st.sidebar:
+
+    st.markdown("## ✦ ESMERAY AI")
+    st.caption("Your intelligent assistant")
+
+    st.divider()
+
+    st.markdown("### 📁 Your documents")
+
+    uploaded_files = st.file_uploader(
+        "Upload PDF or TXT files",
+        type=["pdf", "txt"],
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+
+        if st.button("Process uploaded documents"):
+
+            all_chunks = []
+
+            for uploaded_file in uploaded_files:
+
+                extracted = extract_text(uploaded_file)
+
+                all_chunks.extend(
+                    split_into_chunks(extracted)
+                )
+
+            st.session_state.documents = all_chunks
+
+            st.success(
+                f"Processed {len(uploaded_files)} file(s). "
+                f"Created {len(all_chunks)} text chunks."
+            )
+
+    if st.session_state.documents:
+        st.caption(
+            f"{len(st.session_state.documents)} document chunks available"
+        )
+
+    st.divider()
+
+    if st.button("＋ New conversation"):
+
+        st.session_state.messages = []
+        st.session_state.pending_prompt = None
+        st.rerun()
+
+    if st.button("Clear documents"):
+
+        st.session_state.documents = []
+        st.success("Documents cleared.")
+
+
+# ==========================================
+# MAIN HOME SCREEN
+# ==========================================
+
+st.markdown(
+    '<div class="nova-title">✦ ESMERAY AI</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="nova-subtitle">'
+    'Your intelligent AI assistant'
+    '</div>',
+    unsafe_allow_html=True
+)
+
+
+# ==========================================
+# WELCOME SCREEN
+# ==========================================
+
+if not st.session_state.messages:
+
+    st.markdown("""
+    <div class="welcome">
+        <h2>Hello Nakshatra! ✨</h2>
+        <p>
+            Welcome to ESMERAY AI.
+            What would you like to explore today?
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### 💡 Suggested questions")
+
+    suggestions = [
+        "Explain a difficult topic in simple words",
+        "Summarize my uploaded PDF",
+        "Answer questions from my documents",
+        "Help me brainstorm new ideas"
+    ]
+
+    columns = st.columns(2)
+
+    for index, suggestion in enumerate(suggestions):
+
+        with columns[index % 2]:
+
+            if st.button(
+                suggestion,
+                key=f"suggestion_{index}"
+            ):
+                st.session_state.pending_prompt = suggestion
+                st.rerun()
+
+
+# ==========================================
+# DISPLAY CHAT HISTORY
+# ==========================================
+
+for message in st.session_state.messages:
+
+    # Default avatars avoid custom avatar file errors.
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+
+# ==========================================
+# CHAT INPUT
+# ==========================================
+
+typed_question = st.chat_input(
+    "Ask ESMERAY anything..."
+)
+
+question = (
+    st.session_state.pending_prompt
+    or typed_question
+)
+
+if question:
+
+    st.session_state.pending_prompt = None
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": question
+    })
+
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+
+        with st.spinner("ESMERAY is thinking..."):
+
+            answer = ask_esmeray(question)
+
+        st.markdown(answer)
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer
+    })
