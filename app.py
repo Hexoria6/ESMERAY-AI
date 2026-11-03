@@ -28,7 +28,7 @@ GROQ_API_URL = (
 
 
 # ==========================================
-# DESIGN - EMERALD, TEAL AND MINT
+# DESIGN - LAVENDER AND PURPLE
 # ==========================================
 
 st.markdown("""
@@ -36,9 +36,9 @@ st.markdown("""
 
 .stApp {
     background: linear-gradient(
-        135deg, #071b19, #103b35, #081f20
+        135deg, #f3edff, #e6dcff, #f7f2ff
     );
-    color: white;
+    color: #211536;
 }
 
 header[data-testid="stHeader"] {
@@ -52,98 +52,137 @@ header[data-testid="stHeader"] {
 }
 
 h1, h2, h3, p, label {
-    color: white;
+    color: #211536;
 }
+
+/* MAIN TITLE */
 
 .nova-title {
     text-align: center;
     font-size: 48px;
     font-weight: 800;
-    color: #eafff5;
+    color: #58358c;
     margin-bottom: 5px;
     letter-spacing: 2px;
 }
 
 .nova-subtitle {
     text-align: center;
-    color: #a9d8c9;
+    color: #765a9e;
     font-size: 16px;
     margin-bottom: 30px;
 }
 
+/* WELCOME SECTION */
+
 .welcome {
     text-align: center;
     padding: 32px 15px;
-    border: 1px solid #398a72;
+    border: 1px solid #c8b4ef;
     border-radius: 22px;
     background: linear-gradient(
-        135deg, #12483c, #1d6653
+        135deg, #e5d7ff, #d5c2fa
     );
     margin-bottom: 25px;
 }
 
 .welcome h2 {
     font-size: 30px;
-    color: #ffffff;
+    color: #45236f;
     margin-bottom: 8px;
 }
 
 .welcome p {
-    color: #d0f5e6;
+    color: #62468a;
 }
 
+/* CHAT MESSAGES */
+
 div[data-testid="stChatMessage"] {
-    border: 1px solid #397a68;
+    border: 1px solid #cbb9ed;
     border-radius: 16px;
     padding: 14px;
     margin-bottom: 14px;
-    background: #123a34;
+    background: #ffffff;
 }
+
+/* FORCE CHAT TEXT TO BLACK */
+
+div[data-testid="stChatMessage"],
+div[data-testid="stChatMessage"] p,
+div[data-testid="stChatMessage"] li,
+div[data-testid="stChatMessage"] span,
+div[data-testid="stChatMessage"] strong,
+div[data-testid="stChatMessage"] em,
+div[data-testid="stChatMessage"] h1,
+div[data-testid="stChatMessage"] h2,
+div[data-testid="stChatMessage"] h3,
+div[data-testid="stChatMessage"] code {
+    color: #171020 !important;
+}
+
+/* USER MESSAGE */
 
 div[data-testid="stChatMessage"]:has(
     div[data-testid="chatAvatarIcon-user"]
 ) {
-    background: #ffffff;
-    color: #153b32;
-    border: 1px solid #d9eee5;
+    background: #e6dcff;
+    border: 1px solid #bca4e9;
 }
 
 div[data-testid="stChatMessage"]:has(
     div[data-testid="chatAvatarIcon-user"]
 ) p {
-    color: #153b32 !important;
+    color: #171020 !important;
 }
 
-div[data-testid="stChatMessage"] p {
-    color: white;
-}
+/* BUTTONS */
 
 .stButton > button {
     width: 100%;
     min-height: 48px;
     border-radius: 12px;
-    border: 1px solid #68b99b;
-    background: #174d40;
-    color: white;
+    border: 1px solid #a88bd7;
+    background: #d8c6fa;
+    color: #35204f;
     transition: 0.2s;
 }
 
 .stButton > button:hover {
-    background: #26745d;
-    border-color: #a8f0d1;
-    color: white;
+    background: #b99ce9;
+    border-color: #8057c5;
+    color: #211536;
 }
+
+/* CHAT INPUT */
 
 .stChatInput textarea {
-    color: white !important;
+    color: #171020 !important;
+    background: #ffffff !important;
 }
+
+.stChatInput textarea::placeholder {
+    color: #89799e !important;
+}
+
+/* SIDEBAR */
 
 section[data-testid="stSidebar"] {
-    background: #092723;
+    background: #e5d9f8;
 }
 
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+    color: #302044 !important;
+}
+
+/* FILE UPLOADER */
+
 div[data-testid="stFileUploader"] {
-    border: 1px dashed #70c6a5;
+    border: 1px dashed #9c7acb;
     border-radius: 12px;
     padding: 10px;
 }
@@ -173,6 +212,7 @@ if "pending_prompt" not in st.session_state:
 def extract_text(uploaded_file):
 
     try:
+
         name = uploaded_file.name.lower()
 
         if name.endswith(".pdf"):
@@ -414,6 +454,7 @@ Your responsibilities:
         ]
 
         # Add previous conversation history.
+
         previous_messages = st.session_state.messages[:-1]
 
         for message in previous_messages[-10:]:
@@ -428,6 +469,7 @@ Your responsibilities:
             })
 
         # Add current question.
+
         messages.append({
             "role": "user",
             "content": prompt
