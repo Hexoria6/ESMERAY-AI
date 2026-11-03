@@ -20,10 +20,11 @@ st.set_page_config(
     layout="wide"
 )
 
-PRIMARY_MODEL = "gemini-3.8-flash"
-FALLBACK_MODEL = "gemini-3.6-flash"
+GROQ_MODEL = "openai/gpt-oss-20b"
 
-API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
+GROQ_API_URL = (
+    "https://api.groq.com/openai/v1/chat/completions"
+)
 
 
 # ==========================================
@@ -170,10 +171,12 @@ if "pending_prompt" not in st.session_state:
 # ==========================================
 
 def extract_text(uploaded_file):
+
     try:
         name = uploaded_file.name.lower()
 
         if name.endswith(".pdf"):
+
             reader = PdfReader(
                 io.BytesIO(uploaded_file.getvalue())
             )
@@ -184,12 +187,14 @@ def extract_text(uploaded_file):
             )
 
         if name.endswith(".txt"):
+
             return uploaded_file.getvalue().decode(
                 "utf-8",
                 errors="replace"
             )
 
     except Exception as error:
+
         st.warning(
             f"Could not read {uploaded_file.name}: {error}"
         )
@@ -202,6 +207,7 @@ def split_into_chunks(
     chunk_size=900,
     overlap=150
 ):
+
     text = " ".join(text.split())
 
     if not text:
@@ -211,7 +217,9 @@ def split_into_chunks(
     start = 0
 
     while start < len(text):
+
         end = start + chunk_size
+
         chunks.append(text[start:end])
 
         if end >= len(text):
@@ -223,12 +231,14 @@ def split_into_chunks(
 
 
 def retrieve_context(question):
+
     chunks = st.session_state.documents
 
     if not chunks:
         return ""
 
     try:
+
         vectorizer = TfidfVectorizer(
             stop_words="english",
             max_features=5000
@@ -254,109 +264,119 @@ def retrieve_context(question):
         return "\n\n".join(selected)
 
     except Exception:
+
         return ""
 
 
 # ==========================================
-# GEMINI API REQUEST WITH RETRIES
+# GROQ API REQUEST WITH RETRIES
 # ==========================================
 
-def call_model(model, payload, api_key):
+def call_model(messages, api_key):
 
-    url = f"{API_BASE}{model}:generateContent"
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 1500
+    }
 
     for attempt in range(3):
 
         try:
+
             response = requests.post(
-                url,
+                GROQ_API_URL,
                 headers={
                     "Content-Type": "application/json",
-                    "x-goog-api-key": api_key
+                    "Authorization": f"Bearer {api_key}"
                 },
                 json=payload,
                 timeout=60
             )
 
         except requests.exceptions.Timeout:
+
             if attempt < 2:
+
                 time.sleep(2 ** attempt)
                 continue
 
             return None, "The request timed out."
 
         except requests.exceptions.RequestException:
+
             if attempt < 2:
+
                 time.sleep(2 ** attempt)
                 continue
 
-            return None, "Could not connect to the AI service."
+            return None, "Could not connect to Groq AI."
 
         if response.status_code == 200:
 
             try:
+
                 data = response.json()
-                candidates = data.get("candidates", [])
 
-                if not candidates:
-                    return None, "The model returned no answer."
+                answer = data["choices"][0]["message"]["content"]
 
-                parts = candidates[0].get(
-                    "content", {}
-                ).get("parts", [])
+                if answer:
 
-                answer = "\n".join(
-                    part.get("text", "")
-                    for part in parts
-                    if part.get("text")
-                ).strip()
+                    return answer.strip(), None
 
-                return (
-                    answer or None,
-                    None if answer else "The model returned an empty answer."
-                )
+                return None, "The model returned an empty answer."
 
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, IndexError, TypeError):
+
                 return None, "Unexpected AI response."
 
         if response.status_code in (
             408, 429, 500, 502, 503, 504
         ):
+
             if attempt < 2:
+
                 delay = (2 ** attempt) + random.uniform(0, 1)
+
                 time.sleep(delay)
                 continue
 
-            return None, f"Temporary API error {response.status_code}"
-
         try:
+
             detail = response.json().get(
                 "error", {}
-            ).get("message", "Unknown API error")
+            ).get(
+                "message", "Unknown API error"
+            )
+
         except Exception:
+
             detail = "Unexpected API response."
 
-        return None, f"API error {response.status_code}: {detail}"
+        return None, f"Groq API error {response.status_code}: {detail}"
 
     return None, "Please try again later."
 
 
 # ==========================================
-# ESMERAY AI ASSISTANT
+# ESMERAY AI ASSISTANT - GROQ
 # ==========================================
 
 def ask_esmeray(question):
 
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
+
+        api_key = st.secrets["GROQ_API_KEY"]
 
         context = retrieve_context(question)
 
         if context:
+
             prompt = f"""
 Use these document excerpts when relevant.
 If the answer is not present in the documents,
-clearly say so.
+clearly say so. Do not invent document facts.
 
 DOCUMENT EXCERPTS:
 
@@ -366,7 +386,9 @@ USER QUESTION:
 
 {question}
 """
+
         else:
+
             prompt = question
 
         system_instruction = """
@@ -380,78 +402,56 @@ Your responsibilities:
 4. Be friendly and respectful.
 5. When documents are supplied, prioritize their contents.
 6. Never pretend to know information that was not provided.
+7. If a question is about uploaded documents,
+   distinguish document information from general knowledge.
 """
 
-        contents = []
+        messages = [
+            {
+                "role": "system",
+                "content": system_instruction
+            }
+        ]
 
-        # Do not add the current question twice.
+        # Add previous conversation history.
         previous_messages = st.session_state.messages[:-1]
 
         for message in previous_messages[-10:]:
 
-            contents.append({
+            messages.append({
                 "role": (
                     "user"
                     if message["role"] == "user"
-                    else "model"
+                    else "assistant"
                 ),
-                "parts": [
-                    {"text": message["content"]}
-                ]
+                "content": message["content"]
             })
 
-        contents.append({
+        # Add current question.
+        messages.append({
             "role": "user",
-            "parts": [{"text": prompt}]
+            "content": prompt
         })
 
-        payload = {
-            "system_instruction": {
-                "parts": [
-                    {"text": system_instruction}
-                ]
-            },
-            "contents": contents,
-            "generationConfig": {
-                "maxOutputTokens": 1500
-            }
-        }
-
         answer, error = call_model(
-            PRIMARY_MODEL,
-            payload,
+            messages,
             api_key
         )
 
         if answer:
             return answer
 
-        # Fallback only for temporary service errors.
-        if error and error.startswith("Temporary API error"):
-
-            answer, fallback_error = call_model(
-                FALLBACK_MODEL,
-                payload,
-                api_key
-            )
-
-            if answer:
-                return answer
-
-            return (
-                "ESMERAY is temporarily busy. "
-                "Please wait a little and try again."
-            )
-
         return error or "ESMERAY could not generate an answer."
 
     except KeyError:
+
         return (
-            "GEMINI_API_KEY is missing. "
+            "GROQ_API_KEY is missing. "
             "Please check Streamlit Secrets."
         )
 
     except Exception:
+
         return (
             "Something went wrong. "
             "Please try asking again."
@@ -465,6 +465,7 @@ Your responsibilities:
 with st.sidebar:
 
     st.markdown("## ✦ ESMERAY AI")
+
     st.caption("Your intelligent assistant")
 
     st.divider()
@@ -499,6 +500,7 @@ with st.sidebar:
             )
 
     if st.session_state.documents:
+
         st.caption(
             f"{len(st.session_state.documents)} document chunks available"
         )
@@ -508,12 +510,15 @@ with st.sidebar:
     if st.button("＋ New conversation"):
 
         st.session_state.messages = []
+
         st.session_state.pending_prompt = None
+
         st.rerun()
 
     if st.button("Clear documents"):
 
         st.session_state.documents = []
+
         st.success("Documents cleared.")
 
 
@@ -569,7 +574,9 @@ if not st.session_state.messages:
                 suggestion,
                 key=f"suggestion_{index}"
             ):
+
                 st.session_state.pending_prompt = suggestion
+
                 st.rerun()
 
 
@@ -579,8 +586,8 @@ if not st.session_state.messages:
 
 for message in st.session_state.messages:
 
-    # Default avatars avoid custom avatar file errors.
     with st.chat_message(message["role"]):
+
         st.markdown(message["content"])
 
 
@@ -607,6 +614,7 @@ if question:
     })
 
     with st.chat_message("user"):
+
         st.markdown(question)
 
     with st.chat_message("assistant"):
